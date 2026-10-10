@@ -214,20 +214,20 @@
 
       const res = await fetch(url);
       
-      // 處理 403 權限或 Referrer 受限錯誤
-      if (res.status === 403) {
-        let errMsg = '金鑰受限或網址未授權';
+      // 處理 400 (API Key 無效) 或 403 (權限/網址受限)
+      if (res.status === 400 || res.status === 403) {
+        let errMsg = res.status === 400 ? '金鑰無效 (API_KEY_INVALID)' : '金鑰受限或網址未授權';
         try {
           const errJson = await res.json();
           errMsg = errJson?.error?.message || errMsg;
         } catch (e) {}
         
-        // 若帶 Key 發生 403，提示並嘗試切換無 Key 模式
+        // 若帶 Key 發生錯誤，自動嘗試切換無 Key 模式
         if (useKey && apiKey) {
-          showToast(`⚠️ API Key 權限錯誤 (403)：${errMsg}。自動切換無金鑰模式重試...`, 'warning', 6000);
+          showToast(`⚠️ API Key 錯誤 (${res.status})：${errMsg}。自動切換無金鑰模式重試...`, 'warning', 6000);
           return await queryGoogleBooks(queryStr, false);
         } else {
-          throw new Error(`Google API 403: ${errMsg}`);
+          throw new Error(`Google API ${res.status}: ${errMsg}`);
         }
       }
 
@@ -249,13 +249,13 @@
     }
 
     try {
-      // 策略一：精確 ISBN 查詢 (q=isbn:xxx)
-      let data = await queryGoogleBooks(`isbn:${clean}`);
+      // 策略一：直接以純 ISBN 全文檢索 (q=xxx)，速度最快、省去重複請求，對繁體中文書涵蓋率最高
+      let data = await queryGoogleBooks(clean);
 
-      // 策略二：若查無資料，自動以純碼全文檢索 (q=xxx)，許多中文書籍以此方式方能索引
+      // 策略二：若極少數情況查無資料，備用嘗試 q=isbn:xxx
       if (!data || data.totalItems === 0 || !data.items || data.items.length === 0) {
-        console.log(`isbn:${clean} 查無結果，嘗試全文檢索 ${clean}...`);
-        data = await queryGoogleBooks(clean);
+        console.log(`q=${clean} 查無結果，嘗試備用檢索 isbn:${clean}...`);
+        data = await queryGoogleBooks(`isbn:${clean}`);
       }
 
       if (data && data.totalItems > 0 && data.items && data.items.length > 0) {
