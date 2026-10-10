@@ -416,7 +416,7 @@
   }
 
   // =========================================================================
-  // 8. 鏡頭與掃描核心 (Html5Qrcode 控制，支援 HD 與連續對焦)
+  // 8. 鏡頭與掃描核心 (Html5Qrcode 控制，支援彈性啟動與鏡頭枚舉容錯)
   // =========================================================================
   async function startScanner() {
     if (isScanning) return;
@@ -427,43 +427,65 @@
     updateScanStatus('啟動相機中...', 'searching');
 
     try {
-      if (!html5QrCode) {
-        html5QrCode = new Html5Qrcode('reader', {
-          formatsToSupport: [
-            Html5QrcodeSupportedFormats.EAN_13,
-            Html5QrcodeSupportedFormats.EAN_8
-          ],
-          verbose: false
-        });
+      // 若已有舊實例，先清理避免衝突
+      if (html5QrCode) {
+        try {
+          if (html5QrCode.isScanning) {
+            await html5QrCode.stop();
+          }
+          await html5QrCode.clear();
+        } catch (e) {}
       }
 
-      // 請求高解析度視訊串流與對焦，大幅改善低光、反光誤讀問題
-      const cameraConfig = {
-        facingMode: 'environment',
-        focusMode: 'continuous',
-        width: { min: 1280, ideal: 1920 },
-        height: { min: 720, ideal: 1080 }
-      };
+      html5QrCode = new Html5Qrcode('reader', {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8
+        ],
+        verbose: false
+      });
 
       const scanConfig = {
-        fps: 12, // 12 FPS 給予手機相機充裕曝光與自動對焦時間
+        fps: 12,
         qrbox: (viewfinderWidth, viewfinderHeight) => {
-          // 精確鎖定橫向條碼區域，避免讀取到周圍背景
-          const width = Math.min(Math.floor(viewfinderWidth * 0.85), 360);
-          const height = Math.min(Math.floor(viewfinderHeight * 0.4), 160);
+          const vw = viewfinderWidth || 300;
+          const vh = viewfinderHeight || 200;
+          const width = Math.min(Math.floor(vw * 0.85), 340);
+          const height = Math.min(Math.floor(vh * 0.45), 150);
           return { width, height };
-        },
-        aspectRatio: 1.3333
+        }
       };
 
-      await html5QrCode.start(
-        cameraConfig,
-        scanConfig,
-        (decodedText) => {
-          handleScannedBarcode(decodedText, false);
-        },
-        () => {}
-      );
+      const onScanSuccess = (decodedText) => {
+        handleScannedBarcode(decodedText, false);
+      };
+      const onScanError = () => {};
+
+      // 階梯式啟動：
+      // 1. 優先以 facingMode: environment 啟動（避免硬性 min 限制導致手機 OverconstrainedError）
+      try {
+        await html5QrCode.start(
+          { facingMode: 'environment' },
+          scanConfig,
+          onScanSuccess,
+          onScanError
+        );
+      } catch (err1) {
+        console.warn('以 facingMode 啟動失敗，嘗試枚舉相機設備...', err1);
+        // 2. 若直接呼叫失敗，嘗試透過 getCameras() 枚舉設備 ID
+        const cameras = await Html5Qrcode.getCameras();
+        if (cameras && cameras.length > 0) {
+          const backCam = cameras.find(c => /back|rear|environment|後/i.test(c.label)) || cameras[cameras.length - 1];
+          await html5QrCode.start(
+            backCam.id,
+            scanConfig,
+            onScanSuccess,
+            onScanError
+          );
+        } else {
+          throw err1;
+        }
+      }
 
       isScanning = true;
       updateScanStatus('鏡頭就緒中 (對準條碼)', 'ready');
@@ -484,13 +506,18 @@
   }
 
   async function stopScanner() {
-    if (!isScanning || !html5QrCode) return;
+    if (!isScanning && !html5QrCode) return;
 
     try {
       if (isTorchOn) {
         await toggleTorch(false);
       }
-      await html5QrCode.stop();
+      if (html5QrCode && html5QrCode.isScanning) {
+        await html5QrCode.stop();
+      }
+    } catch (err) {
+      console.error('停止相機失敗:', err);
+    } finally {
       isScanning = false;
       el.cameraPlaceholder.style.display = 'flex';
       el.scannerOverlay.style.display = 'none';
@@ -499,8 +526,6 @@
       el.iconToggleCamera.setAttribute('data-lucide', 'play');
       el.btnToggleTorch.disabled = true;
       lucide.createIcons();
-    } catch (err) {
-      console.error('停止相機失敗:', err);
     }
   }
 

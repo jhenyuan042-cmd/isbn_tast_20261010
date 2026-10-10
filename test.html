@@ -675,36 +675,42 @@
         camStatus.textContent = '啟動中...';
 
         try {
-          if (!html5QrCode) {
-            html5QrCode = new Html5Qrcode('reader', {
-              formatsToSupport: [
-                Html5QrcodeSupportedFormats.EAN_13,
-                Html5QrcodeSupportedFormats.EAN_8
-              ],
-              verbose: false
-            });
+          if (html5QrCode) {
+            try {
+              if (html5QrCode.isScanning) await html5QrCode.stop();
+              await html5QrCode.clear();
+            } catch(e) {}
           }
 
-          const constraints = {
-            facingMode: 'environment',
-            width: { ideal: 1920, min: 1280 },
-            height: { ideal: 1080, min: 720 }
-          };
+          html5QrCode = new Html5Qrcode('reader', {
+            formatsToSupport: [
+              Html5QrcodeSupportedFormats.EAN_13,
+              Html5QrcodeSupportedFormats.EAN_8
+            ],
+            verbose: false
+          });
 
           const config = {
             fps: 12,
-            qrbox: { width: 280, height: 120 },
-            aspectRatio: 1.6
+            qrbox: { width: 280, height: 120 }
           };
 
-          await html5QrCode.start(
-            constraints,
-            config,
-            (decodedText, decodedResult) => {
-              handleBarcode(decodedText);
-            },
-            () => {}
-          );
+          const onScan = (decodedText) => handleBarcode(decodedText);
+          const onErr = () => {};
+
+          try {
+            // 優先嘗試標準後置鏡頭
+            await html5QrCode.start({ facingMode: 'environment' }, config, onScan, onErr);
+          } catch(e1) {
+            log(`[相機提示] 直接以 facingMode 啟動失敗，嘗試搜尋後置鏡頭 ID...`, 'warn');
+            const cameras = await Html5Qrcode.getCameras();
+            if (cameras && cameras.length > 0) {
+              const backCam = cameras.find(c => /back|rear|environment|後/i.test(c.label)) || cameras[cameras.length - 1];
+              await html5QrCode.start(backCam.id, config, onScan, onErr);
+            } else {
+              throw e1;
+            }
+          }
 
           isScanning = true;
           camStatus.textContent = '掃描中 (綠色框線對準條碼)';
@@ -712,7 +718,7 @@
           camPlaceholder.classList.add('hidden');
           btnStart.style.display = 'none';
           btnStop.style.display = 'inline-flex';
-          log('[相機] 相機成功啟動 (HD 模式鎖定 EAN-13/8 條碼)', 'success');
+          log('[相機] 相機成功啟動！請將條碼置於框線內', 'success');
 
           // 檢查補光燈
           try {
