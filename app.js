@@ -199,45 +199,69 @@
   }
 
   // =========================================================================
-  // 6. Google Books API 串接邏輯
+  // 6. Google Books API 串接邏輯 (支援雙重檢索、403 金鑰回退與詳細報錯)
   // =========================================================================
   async function fetchBookInfoByISBN(isbn) {
     const clean = isbn.replace(/[^0-9Xx]/g, '').trim();
     const apiKey = localStorage.getItem('google_books_api_key') || '';
-    let url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${clean}`;
-    if (apiKey) {
-      url += `&key=${encodeURIComponent(apiKey)}`;
+
+    // 輔助函式：發送請求並解析
+    async function queryGoogleBooks(queryStr, useKey = true) {
+      let url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(queryStr)}`;
+      if (useKey && apiKey) {
+        url += `&key=${encodeURIComponent(apiKey)}`;
+      }
+
+      const res = await fetch(url);
+      
+      // 處理 403 權限或 Referrer 受限錯誤
+      if (res.status === 403) {
+        let errMsg = '金鑰受限或網址未授權';
+        try {
+          const errJson = await res.json();
+          errMsg = errJson?.error?.message || errMsg;
+        } catch (e) {}
+        
+        // 若帶 Key 發生 403，提示並嘗試切換無 Key 模式
+        if (useKey && apiKey) {
+          showToast(`⚠️ API Key 權限錯誤 (403)：${errMsg}。自動切換無金鑰模式重試...`, 'warning', 6000);
+          return await queryGoogleBooks(queryStr, false);
+        } else {
+          throw new Error(`Google API 403: ${errMsg}`);
+        }
+      }
+
+      if (res.status === 429) {
+        showToast('⚠️ Google 查詢次數達上限 (429)，請稍候重試或至 ⚙️ 設定更換 API Key', 'warning', 6000);
+        throw new Error('Google Books API 429 頻率受限');
+      }
+
+      if (!res.ok) {
+        let errMsg = `HTTP ${res.status}`;
+        try {
+          const errJson = await res.json();
+          errMsg = errJson?.error?.message || errMsg;
+        } catch (e) {}
+        throw new Error(`Google API 錯誤 (${errMsg})`);
+      }
+
+      return await res.json();
     }
 
     try {
-      const response = await fetch(url);
-      if (response.status === 429) {
-        showToast('⚠️ Google 查詢次數達上限 (429)，可點右上角 ⚙️ 設定填入免費 API Key', 'warning', 6000);
-        return {
-          isbn: clean,
-          title: `未取得線上資料 (${clean})`,
-          subtitle: '',
-          authors: '待手動填寫',
-          publisher: 'API 頻率受限 (429)',
-          publishedDate: '',
-          pageCount: '',
-          categories: '',
-          description: 'Google Books API 回傳 429 查詢次數過多。請稍候或於右上角設定輸入個人 API Key。',
-          thumbnail: '',
-          scannedAt: new Date().toLocaleString('zh-TW', { hour12: false })
-        };
+      // 策略一：精確 ISBN 查詢 (q=isbn:xxx)
+      let data = await queryGoogleBooks(`isbn:${clean}`);
+
+      // 策略二：若查無資料，自動以純碼全文檢索 (q=xxx)，許多中文書籍以此方式方能索引
+      if (!data || data.totalItems === 0 || !data.items || data.items.length === 0) {
+        console.log(`isbn:${clean} 查無結果，嘗試全文檢索 ${clean}...`);
+        data = await queryGoogleBooks(clean);
       }
 
-      if (!response.ok) {
-        throw new Error(`HTTP error: ${response.status}`);
-      }
-      const data = await response.json();
-
-      if (data.totalItems > 0 && data.items && data.items.length > 0) {
+      if (data && data.totalItems > 0 && data.items && data.items.length > 0) {
         const item = data.items[0];
         const info = item.volumeInfo || {};
 
-        // 取得最高解析度縮圖（並強制換為 HTTPS）
         let thumbnail = '';
         if (info.imageLinks) {
           thumbnail = (info.imageLinks.thumbnail || info.imageLinks.smallThumbnail || '')
@@ -258,7 +282,8 @@
           scannedAt: new Date().toLocaleString('zh-TW', { hour12: false })
         };
       } else {
-        // Google Books 無對應記錄時的備用語意結構
+        // Google Books 無對應記錄時
+        showToast(`ℹ️ Google Books 未收錄 ISBN: ${clean}，已建立空白卡片供手動填寫`, 'warning', 5000);
         return {
           isbn: clean,
           title: `未收錄書籍 (${clean})`,
@@ -268,23 +293,24 @@
           publishedDate: '',
           pageCount: '',
           categories: '',
-          description: 'Google Books 資料庫中未找到該 ISBN 之線上書籍資訊。',
+          description: 'Google Books 資料庫中未找到該 ISBN 之線上書籍資訊。可點擊卡片編輯手動輸入書名。',
           thumbnail: '',
           scannedAt: new Date().toLocaleString('zh-TW', { hour12: false })
         };
       }
     } catch (err) {
       console.error('Google Books API fetch failed:', err);
+      showToast(`❌ ${err.message}`, 'error', 6000);
       return {
         isbn: clean,
         title: `查詢失敗書籍 (${clean})`,
         subtitle: '',
         authors: '未知',
-        publisher: '網路異常或未收錄',
+        publisher: '查詢異常',
         publishedDate: '',
         pageCount: '',
         categories: '',
-        description: '連線查詢時發生問題，已保留 ISBN。',
+        description: `連線查詢失敗：${err.message}`,
         thumbnail: '',
         scannedAt: new Date().toLocaleString('zh-TW', { hour12: false })
       };
@@ -292,38 +318,63 @@
   }
 
   // =========================================================================
-  // 7. 條碼處理與防呆重複機制 (Barcode Handling)
+  // 7. 條碼處理與防呆重複機制 (Barcode Handling + 防誤讀校驗)
   // =========================================================================
-  async function handleScannedBarcode(decodedText) {
+  let candidateCode = '';
+  let candidateHits = 0;
+
+  async function handleScannedBarcode(decodedText, isManual = false) {
     if (scanCooldown) return;
 
-    // 清理字元 (排除條碼前後空格或奇怪字符)
+    // 清理字元 (排除條碼前後空格或非數字字元)
     const rawIsbn = decodedText.replace(/[^0-9Xx]/g, '').trim();
 
-    // ISBN 通常為 10 碼或 13 碼，做基本格式驗證
+    // 基本長度驗證 (ISBN-10 或 ISBN-13)
     if (rawIsbn.length !== 10 && rawIsbn.length !== 13) {
-      return; // 略過非標準 ISBN 條碼
+      return;
     }
 
-    // 啟動防抖冷卻，避免同一個條碼在鏡頭前連續觸發
+    // ISBN-13 規範校驗：國際標準書號必須以 978 或 979 開頭
+    if (rawIsbn.length === 13 && !rawIsbn.startsWith('978') && !rawIsbn.startsWith('979')) {
+      if (isManual) {
+        showToast(`⚠️ 條碼 ${rawIsbn} 並非標準 ISBN（應以 978 或 979 開頭）`, 'warning', 4000);
+      }
+      return; // 忽略台灣書籍封底常見的第二組定價/分類條碼 (非 ISBN)
+    }
+
+    // 鏡頭防光影誤讀機制 (Double-Frame Confirmation)
+    // 鏡頭掃描需連續 2 幀讀取相同碼才確認，手動輸入則直接通過
+    if (!isManual) {
+      if (rawIsbn === candidateCode) {
+        candidateHits++;
+      } else {
+        candidateCode = rawIsbn;
+        candidateHits = 1;
+        return; // 等待下一幀驗證
+      }
+
+      if (candidateHits < 2) {
+        return; // 尚未達到 2 幀確認
+      }
+    }
+
+    // 重置候選緩存並進入防抖冷卻
+    candidateCode = '';
+    candidateHits = 0;
     scanCooldown = true;
     lastScannedIsbn = rawIsbn;
     setTimeout(() => {
       scanCooldown = false;
-    }, 2000);
+    }, 2200);
 
     // 【核心邏輯】：檢查是否重複
     const existingIndex = books.findIndex(b => b.isbn === rawIsbn);
     if (existingIndex !== -1) {
-      // 1. 播放警示音 & 震動
       SoundEffects.playWarning();
       triggerHaptic([180, 80, 180]);
 
-      // 2. 顯示重複提示橫幅
       const existingBook = books[existingIndex];
-      showToast(`⚠️ 重複條碼：【${existingBook.title}】(${rawIsbn}) 已在清單中，未重複新增！`, 'warning', 4500);
-
-      // 3. 高亮並捲動至已存在的卡片
+      showToast(`⚠️ 重複條碼：【${existingBook.title}】(${rawIsbn}) 已在清單中！`, 'warning', 4500);
       highlightCard(existingIndex);
       return;
     }
@@ -333,11 +384,10 @@
 
     try {
       const bookData = await fetchBookInfoByISBN(rawIsbn);
-      books.unshift(bookData); // 最新掃描的排在最上方
+      books.unshift(bookData); // 最新掃描排在最上方
       saveBooksToStorage();
       renderBooksList();
 
-      // 成功反饋
       SoundEffects.playSuccess();
       triggerHaptic([90]);
       showToast(`✅ 已新增：【${bookData.title}】`, 'success');
@@ -366,7 +416,7 @@
   }
 
   // =========================================================================
-  // 8. 鏡頭與掃描核心 (Html5Qrcode 控制)
+  // 8. 鏡頭與掃描核心 (Html5Qrcode 控制，支援 HD 與連續對焦)
   // =========================================================================
   async function startScanner() {
     if (isScanning) return;
@@ -387,28 +437,32 @@
         });
       }
 
-      const config = {
-        fps: 15,
+      // 請求高解析度視訊串流與對焦，大幅改善低光、反光誤讀問題
+      const cameraConfig = {
+        facingMode: 'environment',
+        focusMode: 'continuous',
+        width: { min: 1280, ideal: 1920 },
+        height: { min: 720, ideal: 1080 }
+      };
+
+      const scanConfig = {
+        fps: 12, // 12 FPS 給予手機相機充裕曝光與自動對焦時間
         qrbox: (viewfinderWidth, viewfinderHeight) => {
-          // 自適應掃描框尺寸，優化橫向條碼辨識
-          const minDim = Math.min(viewfinderWidth, viewfinderHeight);
-          return {
-            width: Math.floor(viewfinderWidth * 0.8),
-            height: Math.floor(minDim * 0.45)
-          };
+          // 精確鎖定橫向條碼區域，避免讀取到周圍背景
+          const width = Math.min(Math.floor(viewfinderWidth * 0.85), 360);
+          const height = Math.min(Math.floor(viewfinderHeight * 0.4), 160);
+          return { width, height };
         },
         aspectRatio: 1.3333
       };
 
       await html5QrCode.start(
-        { facingMode: 'environment' },
-        config,
+        cameraConfig,
+        scanConfig,
         (decodedText) => {
-          handleScannedBarcode(decodedText);
+          handleScannedBarcode(decodedText, false);
         },
-        () => {
-          // 逐幀未偵測到條碼時的靜默回呼
-        }
+        () => {}
       );
 
       isScanning = true;
@@ -529,6 +583,9 @@
             <div class="book-card-actions">
               <span class="scan-time">${book.scannedAt || ''}</span>
               <div class="action-btns">
+                <button class="btn-icon btn-icon-sm btn-edit" title="手動編輯書名" data-index="${index}">
+                  <i data-lucide="edit-3"></i>
+                </button>
                 <button class="btn-icon btn-icon-sm btn-detail" title="查看詳細" data-index="${index}">
                   <i data-lucide="info"></i>
                 </button>
@@ -547,6 +604,26 @@
   }
 
   function bindCardEvents() {
+    // 綁定編輯按鈕
+    el.booksList.querySelectorAll('.btn-edit').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.index, 10);
+        const book = books[idx];
+        const newTitle = prompt('請輸入書籍名稱：', book.title.startsWith('未收錄') || book.title.startsWith('查詢失敗') ? '' : book.title);
+        if (newTitle !== null && newTitle.trim()) {
+          book.title = newTitle.trim();
+          const newAuthor = prompt('請輸入作者名稱（選填）：', book.authors === '未知' ? '' : book.authors);
+          if (newAuthor !== null && newAuthor.trim()) {
+            book.authors = newAuthor.trim();
+          }
+          saveBooksToStorage();
+          renderBooksList();
+          showToast('已更新書籍資訊', 'success');
+        }
+      });
+    });
+
     // 綁定個別刪除按鈕
     el.booksList.querySelectorAll('.btn-delete').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -746,7 +823,7 @@
       const val = el.manualIsbnInput.value.trim();
       if (!val) return;
       el.manualDialog.close();
-      await handleScannedBarcode(val);
+      await handleScannedBarcode(val, true);
     });
 
     // 設定視窗開關
