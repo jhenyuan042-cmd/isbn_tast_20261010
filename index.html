@@ -2,214 +2,50 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>ISBN 批次掃描與書籍清單匯出器</title>
-  <meta name="description" content="使用手機相機即時掃描 ISBN 條碼，串聯 Google Books API 自動下載書籍資訊，支援連續批次掃描並匯出 CSV 試算表。">
-  
-  <!-- Google Fonts: Plus Jakarta Sans & Noto Sans TC -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
-  
-  <!-- Lucide Icons CDN -->
-  <script src="https://unpkg.com/lucide@latest"></script>
-  
-  <!-- html5-qrcode 條碼辨識核心庫 -->
-  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>ISBN 批次掃描器</title>
   <link rel="stylesheet" href="style.css">
+  <!-- 條碼辨識核心庫 -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 </head>
 <body>
-  <div class="app-layout">
-    <!-- 頂端導航列 -->
-    <header class="app-header">
-      <div class="brand">
-        <div class="brand-icon">
-          <i data-lucide="book-open-check"></i>
-        </div>
-        <div class="brand-text">
-          <h1>ISBN 批次掃描器</h1>
-          <span class="sub-text">Google Books 即時串聯</span>
-        </div>
-      </div>
-      <div class="header-actions">
-        <button id="btn-manual-input" class="btn-icon" title="手動輸入 ISBN" aria-label="手動輸入 ISBN">
-          <i data-lucide="keyboard"></i>
-        </button>
-        <button id="btn-settings" class="btn-icon" title="API 設定" aria-label="設定">
-          <i data-lucide="settings"></i>
-        </button>
-        <button id="btn-clear-all" class="btn-icon btn-danger" title="清空全部" aria-label="清空清單">
-          <i data-lucide="trash-2"></i>
-        </button>
-      </div>
+  <div class="container">
+    <!-- 頂端列 -->
+    <header>
+      <h1>📚 ISBN 批次掃描器</h1>
+      <button id="btn-export" class="btn btn-green" disabled>📥 匯出 CSV</button>
     </header>
 
-    <!-- 主要內容區：雙欄（桌面）或上下切割（手機） -->
-    <main class="main-content">
-      <!-- 掃描區塊 -->
-      <section class="scanner-section">
-        <div class="scanner-card">
-          <!-- 相機視窗本體 -->
-          <div class="viewport-wrapper">
-            <div id="reader" class="camera-reader"></div>
-            
-            <!-- 掃描準心遮罩 -->
-            <div id="scanner-overlay" class="scanner-overlay">
-              <div class="reticle-box">
-                <div class="reticle-line"></div>
-                <div class="corner corner-tl"></div>
-                <div class="corner corner-tr"></div>
-                <div class="corner corner-bl"></div>
-                <div class="corner corner-br"></div>
-              </div>
-              <p class="scan-guide-text">將書籍條碼置於框線內</p>
-            </div>
+    <!-- 相機掃描區 -->
+    <section class="card camera-card">
+      <div id="reader"></div>
+      <div id="cam-overlay" class="cam-overlay">
+        <p id="cam-tip">相機未啟動</p>
+        <button id="btn-toggle-cam" class="btn btn-primary">📷 啟動相機</button>
+      </div>
+    </section>
 
-            <!-- 相機未啟動佔位圖 -->
-            <div id="camera-placeholder" class="camera-placeholder">
-              <i data-lucide="camera-off" class="placeholder-icon"></i>
-              <p>相機已暫停或尚未啟動</p>
-              <button id="btn-start-camera" class="btn btn-primary">
-                <i data-lucide="camera"></i> 啟動鏡頭掃描
-              </button>
-            </div>
-          </div>
+    <!-- 手動輸入區 -->
+    <section class="manual-bar">
+      <input type="text" id="manual-isbn" placeholder="手動輸入 ISBN (例如 9789861755267)" maxlength="20">
+      <button id="btn-manual-add" class="btn btn-primary">查詢並加入</button>
+    </section>
 
-          <!-- 掃描操作控制列 -->
-          <div class="scanner-controls">
-            <div class="status-indicator">
-              <span id="scan-pulse" class="status-dot"></span>
-              <span id="scan-status-text" class="status-label">準備就緒</span>
-            </div>
-            <div class="control-buttons">
-              <button id="btn-toggle-camera" class="btn btn-sm btn-ghost" title="開關相機">
-                <i data-lucide="video" id="icon-toggle-camera"></i>
-                <span id="text-toggle-camera">暫停</span>
-              </button>
-              <button id="btn-toggle-torch" class="btn btn-sm btn-ghost" title="補光燈" disabled>
-                <i data-lucide="flashlight" id="icon-torch"></i>
-                <span>補光燈</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
+    <!-- 訊息提示條 -->
+    <div id="toast" class="toast"></div>
 
-      <!-- 書籍清單區塊 -->
-      <section class="list-section">
-        <!-- 清單頂部工具欄 -->
-        <div class="list-header">
-          <div class="list-title-wrap">
-            <h2>已掃描書籍</h2>
-            <span id="books-count-badge" class="badge">0 本</span>
-          </div>
-          <button id="btn-export-csv" class="btn btn-success" disabled>
-            <i data-lucide="download"></i> 匯出 CSV 試算表
-          </button>
-        </div>
-
-        <!-- 即時提示橫幅 (重複/成功通知) -->
-        <div id="toast-banner" class="toast-banner" style="display: none;">
-          <div class="toast-icon-wrap" id="toast-icon"></div>
-          <div class="toast-text" id="toast-msg"></div>
-        </div>
-
-        <!-- 書籍清單容器 -->
-        <div class="books-container" id="books-container">
-          <!-- 空狀態提示 -->
-          <div id="empty-state" class="empty-state">
-            <div class="empty-illustration">
-              <i data-lucide="barcode"></i>
-            </div>
-            <h3>尚未掃描任何書籍</h3>
-            <p>點擊上方「啟動鏡頭」對準書籍封底 ISBN 條碼，或點右上角手動輸入。</p>
-          </div>
-
-          <!-- 卡片列表動態注入處 -->
-          <div id="books-list" class="books-list"></div>
-        </div>
-      </section>
-    </main>
+    <!-- 掃描結果清單 -->
+    <section class="list-section">
+      <div class="list-header">
+        <h2>已掃描書籍 (<span id="book-count">0</span> 本)</h2>
+        <button id="btn-clear" class="btn btn-danger btn-sm" disabled>清空清單</button>
+      </div>
+      <div id="book-list" class="book-list">
+        <div id="empty-hint" class="empty-hint">尚未掃描任何書籍</div>
+      </div>
+    </section>
   </div>
 
-  <!-- 手動輸入 ISBN 模態對話框 -->
-  <dialog id="manual-dialog" class="custom-dialog">
-    <div class="dialog-content">
-      <div class="dialog-header">
-        <h3>手動輸入 ISBN</h3>
-        <button id="btn-close-dialog" class="btn-icon" aria-label="關閉">
-          <i data-lucide="x"></i>
-        </button>
-      </div>
-      <form id="manual-form">
-        <p class="dialog-desc">輸入 10 碼或 13 碼 ISBN，系統將透過 Google Books 自動查詢：</p>
-        <div class="input-group">
-          <input 
-            type="text" 
-            id="manual-isbn-input" 
-            placeholder="例如：9789861755267" 
-            pattern="[0-9Xx\- ]+"
-            maxlength="20"
-            required 
-            autocomplete="off"
-          />
-        </div>
-        <div class="dialog-actions">
-          <button type="button" id="btn-dialog-cancel" class="btn btn-ghost">取消</button>
-          <button type="submit" id="btn-dialog-submit" class="btn btn-primary">
-            <i data-lucide="search"></i> 查詢並加入
-          </button>
-        </div>
-      </form>
-    </div>
-  </dialog>
-
-  <!-- 書籍詳細資訊檢視模態框 -->
-  <dialog id="detail-dialog" class="custom-dialog">
-    <div class="dialog-content detail-content">
-      <div class="dialog-header">
-        <h3>書籍詳細資訊</h3>
-        <button id="btn-close-detail" class="btn-icon" aria-label="關閉">
-          <i data-lucide="x"></i>
-        </button>
-      </div>
-      <div id="detail-body" class="detail-body">
-        <!-- 動態渲染書籍詳情 -->
-      </div>
-    </div>
-  </dialog>
-
-  <!-- 設定對話框 (API Key) -->
-  <dialog id="settings-dialog" class="custom-dialog">
-    <div class="dialog-content">
-      <div class="dialog-header">
-        <h3>應用設定</h3>
-        <button id="btn-close-settings" class="btn-icon" aria-label="關閉">
-          <i data-lucide="x"></i>
-        </button>
-      </div>
-      <form id="settings-form">
-        <p class="dialog-desc">若大量查詢出現連線頻率限制 (429)，可填入個人的 Google Books API 金鑰（留空則使用預設公開配額）：</p>
-        <div class="input-group">
-          <input 
-            type="text" 
-            id="api-key-input" 
-            placeholder="AIzaSy... (選填)" 
-            autocomplete="off"
-          />
-        </div>
-        <div class="dialog-actions">
-          <button type="button" id="btn-settings-cancel" class="btn btn-ghost">取消</button>
-          <button type="submit" id="btn-settings-save" class="btn btn-primary">
-            <i data-lucide="save"></i> 儲存設定
-          </button>
-        </div>
-      </form>
-    </div>
-  </dialog>
-
-  <!-- 應用主邏輯腳本 -->
   <script src="app.js"></script>
 </body>
 </html>

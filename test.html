@@ -691,8 +691,8 @@
           });
 
           const config = {
-            fps: 12,
-            qrbox: { width: 280, height: 120 }
+            fps: 15,
+            qrbox: (w, h) => ({ width: Math.floor(w * 0.95), height: Math.floor(h * 0.75) })
           };
 
           const onScan = (decodedText) => handleBarcode(decodedText);
@@ -713,12 +713,42 @@
           }
 
           isScanning = true;
-          camStatus.textContent = '掃描中 (綠色框線對準條碼)';
+          camStatus.textContent = '掃描中 (對準條碼即可)';
           camStatus.style.color = 'var(--success)';
           camPlaceholder.classList.add('hidden');
           btnStart.style.display = 'none';
           btnStop.style.display = 'inline-flex';
-          log('[相機] 相機成功啟動！請將條碼置於框線內', 'success');
+          log('[相機] 相機成功啟動！視野已全面放寬，請對準條碼', 'success');
+
+          // 原生 BarcodeDetector 硬體加速偵測 (Android Chrome / Google Lens 核心)
+          if ('BarcodeDetector' in window) {
+            try {
+              const nativeDetector = new BarcodeDetector({ formats: ['ean_13', 'ean_8'] });
+              const checkVideoTimer = setInterval(() => {
+                const videoEl = document.querySelector('#reader video');
+                if (videoEl) {
+                  clearInterval(checkVideoTimer);
+                  const detectLoop = setInterval(async () => {
+                    if (!isScanning) {
+                      clearInterval(detectLoop);
+                      return;
+                    }
+                    if (videoEl.readyState >= 2) {
+                      try {
+                        const barcodes = await nativeDetector.detect(videoEl);
+                        if (barcodes && barcodes.length > 0) {
+                          for (const b of barcodes) {
+                            if (b.rawValue) handleBarcode(b.rawValue);
+                          }
+                        }
+                      } catch (e) {}
+                    }
+                  }, 120);
+                }
+              }, 200);
+              log('[相機] 已啟用手機原生 BarcodeDetector 硬體加速！', 'success');
+            } catch(e) {}
+          }
 
           // 檢查補光燈
           try {
@@ -753,24 +783,44 @@
         }
       }
 
-      // 條碼處理 (防抖與格式過濾)
+      // ISBN 數學校驗碼驗證函式
+      function isValidISBN(isbn) {
+        const clean = isbn.replace(/[^0-9Xx]/g, '').trim();
+        if (clean.length === 13) {
+          if (!clean.startsWith('978') && !clean.startsWith('979')) return false;
+          let sum = 0;
+          for (let i = 0; i < 12; i++) {
+            sum += parseInt(clean[i], 10) * (i % 2 === 0 ? 1 : 3);
+          }
+          const check = (10 - (sum % 10)) % 10;
+          return check === parseInt(clean[12], 10);
+        }
+        if (clean.length === 10) {
+          let sum = 0;
+          for (let i = 0; i < 9; i++) {
+            sum += parseInt(clean[i], 10) * (10 - i);
+          }
+          const last = clean[9].toUpperCase();
+          const lastVal = last === 'X' ? 10 : parseInt(last, 10);
+          return (sum + lastVal) % 11 === 0;
+        }
+        return false;
+      }
+
+      // 條碼處理 (校驗碼與防抖)
       function handleBarcode(code) {
         if (scanCooldown) return;
         const clean = code.replace(/[^0-9Xx]/g, '').trim();
 
-        // 僅接受 ISBN-10 或 13
-        if (clean.length !== 10 && clean.length !== 13) return;
-
-        // 若為 13 碼，通常必須以 978 或 979 開頭
-        if (clean.length === 13 && !clean.startsWith('978') && !clean.startsWith('979')) {
-          log(`[條碼過濾] 偵測到 ${clean} (非標準 978/979 ISBN，忽略)`, 'warn');
+        // 僅接受通過嚴謹 ISBN 校驗碼規範之條碼
+        if (!isValidISBN(clean)) {
           return;
         }
 
         scanCooldown = true;
-        setTimeout(() => { scanCooldown = false; }, 2200);
+        setTimeout(() => { scanCooldown = false; }, 2000);
 
-        log(`[條碼偵測成功] 讀取到條碼: ${clean}`, 'success');
+        log(`[條碼偵測成功] 讀取到合規 ISBN: ${clean}`, 'success');
         inputTestIsbn.value = clean;
         queryGoogleBooks(clean);
       }
