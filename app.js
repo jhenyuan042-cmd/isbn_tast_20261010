@@ -388,9 +388,13 @@
           }
         } else {
           const errData = await res.json().catch(() => ({}));
-          const errMsg = errData.error ? errData.error.message : `HTTP ${res.status}`;
+          let errMsg = errData.error ? errData.error.message : `HTTP ${res.status}`;
+          if (/does not have the access to Custom Search JSON API/i.test(errMsg)) {
+            errMsg = `尚未在 Google Cloud 啟用 Custom Search API！請前往 console.cloud.google.com 啟用該 API`;
+            log(`[Google 搜尋提示] 請至此連結啟用 API: https://console.cloud.google.com/apis/library/customsearch.googleapis.com`, 'warn');
+          }
           log(`[Google 搜尋失敗] ${errMsg}`, 'error');
-          showToast(`Google 搜尋失敗: ${errMsg}`, 'error', 4000);
+          showToast(`Google 搜尋失敗: ${errMsg}`, 'error', 5000);
         }
       } catch (e) {
         log(`[Google 搜尋網路異常] ${e.message}`, 'error');
@@ -803,13 +807,13 @@
   // =========================================================================
   function loadSettings() {
     googleApiKey = localStorage.getItem(STORAGE_KEY_API_KEY) || '';
-    googleCx = localStorage.getItem(STORAGE_KEY_CX) || '';
+    googleCx = localStorage.getItem(STORAGE_KEY_CX) || '50d13aec36cc44aa4';
 
     dom.settingApiKey.value = googleApiKey;
     dom.settingCx.value = googleCx;
 
-    // 若尚未設定，顯示橫幅
-    if (!googleApiKey || !googleCx) {
+    // 若尚未設定 API Key，顯示橫幅
+    if (!googleApiKey) {
       dom.apiSetupBanner.style.display = 'flex';
     } else {
       dom.apiSetupBanner.style.display = 'none';
@@ -939,7 +943,10 @@
           log(`[連線測試成功] HTTP 200 (${ms}ms, 命中 ${count} 筆)`, 'success');
         } else {
           const errData = await res.json().catch(() => ({}));
-          const msg = errData.error ? errData.error.message : `HTTP ${res.status}`;
+          let msg = errData.error ? errData.error.message : `HTTP ${res.status}`;
+          if (/does not have the access to Custom Search JSON API/i.test(msg)) {
+            msg = `此專案尚未啟用 Custom Search API！請點上方說明連結至 Google Cloud 啟用`;
+          }
           dom.testStatusText.textContent = `❌ 連線失敗: ${msg}`;
           dom.testStatusText.className = 'test-status err';
           log(`[連線測試失敗] ${msg}`, 'error');
