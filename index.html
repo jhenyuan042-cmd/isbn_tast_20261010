@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>ISBN v2 - Google 全網搜尋書目擷取器</title>
+  <meta name="description" content="ISBN 條碼掃描 v2 (A 方案)：透過 Google Programmable Search 全網即時檢索，精準擷取書名、出版社、出版日期與頁數四大核心資訊，支援批次掃描與 CSV 匯出。">
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- html5-qrcode -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- 頂端標題列 -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-badge">A 方案</div>
+        <div>
+          <h1>ISBN 網路即時搜尋器</h1>
+          <p class="brand-sub">Google 全網書目檢索 ‧ 精準擷取 4 大核心欄位</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="btn-open-settings" class="btn btn-icon" title="Google 搜尋 API 設定 (Key / CX)">
+          <i data-lucide="settings"></i>
+        </button>
+        <button id="btn-manual-input" class="btn btn-icon" title="手動輸入或貼上文字">
+          <i data-lucide="keyboard"></i>
+        </button>
+        <button id="btn-clear-all" class="btn btn-icon btn-danger" title="清空所有書籍">
+          <i data-lucide="trash-2"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- API 尚未配置提示橫幅 -->
+    <div id="api-setup-banner" class="api-setup-banner" style="display: none;">
+      <div class="banner-content">
+        <i data-lucide="sparkles" class="banner-icon"></i>
+        <div class="banner-text">
+          <strong>歡迎使用 A 方案 (Google 全網搜尋)</strong>
+          <span>請先設定 Google API Key 與 搜尋引擎 ID (cx)，每日享 100 次免費全網圖書搜尋。</span>
+        </div>
+      </div>
+      <button id="btn-banner-settings" class="btn btn-primary btn-sm">
+        <i data-lucide="sliders"></i> 立即設定
+      </button>
+    </div>
+
+    <!-- 主工作區：三欄 (桌面) / 縱向堆疊 (手機) -->
+    <main class="main-workspace">
+      <!-- 欄位 1: 相機掃描區 -->
+      <section class="card panel-scanner">
+        <div class="panel-header">
+          <div class="panel-title">
+            <i data-lucide="camera"></i> 鏡頭掃描
+          </div>
+          <span id="scan-status-badge" class="status-badge ready">準備就緒</span>
+        </div>
+
+        <div class="camera-viewport-wrap">
+          <div id="reader"></div>
+          
+          <div id="camera-placeholder" class="camera-placeholder">
+            <i data-lucide="scan" class="ph-icon"></i>
+            <p>點擊下方按鈕啟動相機掃描條碼</p>
+            <button id="btn-start-camera" class="btn btn-primary">
+              <i data-lucide="play"></i> 開啟相機
+            </button>
+          </div>
+
+          <div id="scanner-reticle" class="scanner-reticle" style="display:none;">
+            <div class="reticle-box">
+              <div class="laser-line"></div>
+            </div>
+            <span class="reticle-hint">將書籍封底 ISBN 條碼對準綠框</span>
+          </div>
+        </div>
+
+        <div class="camera-control-bar">
+          <button id="btn-toggle-camera" class="btn btn-sm btn-ghost" disabled>
+            <i data-lucide="pause" id="icon-toggle-cam"></i>
+            <span id="text-toggle-cam">暫停鏡頭</span>
+          </button>
+          <button id="btn-toggle-torch" class="btn btn-sm btn-ghost" disabled>
+            <i data-lucide="flashlight"></i>
+            <span>補光燈</span>
+          </button>
+        </div>
+
+        <!-- 快速手動測試框 -->
+        <div class="manual-quick-box">
+          <label for="quick-isbn-input">快速手動測試 ISBN：</label>
+          <div class="input-row">
+            <input type="text" id="quick-isbn-input" placeholder="例如: 9789863840626" value="9789863840626">
+            <button id="btn-quick-search" class="btn btn-primary btn-sm">
+              <i data-lucide="search"></i> 搜尋
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 欄位 2: 已收錄書籍清單 (聚焦 4 大核心欄位) -->
+      <section class="card panel-books">
+        <div class="panel-header">
+          <div class="panel-title">
+            <i data-lucide="book-check"></i> 書籍清單
+            <span id="books-count-badge" class="count-badge">0 本</span>
+          </div>
+          <button id="btn-export-csv" class="btn btn-success btn-sm" disabled>
+            <i data-lucide="download"></i> 匯出 CSV 試算表
+          </button>
+        </div>
+
+        <!-- 即時提示 Toast 橫幅 -->
+        <div id="toast-banner" class="toast-banner" style="display:none;"></div>
+
+        <!-- 書籍卡片列表 -->
+        <div class="books-scroll-area" id="books-container">
+          <div id="books-empty" class="empty-state">
+            <div class="empty-icon"><i data-lucide="barcode"></i></div>
+            <h3>目前尚無書籍紀錄</h3>
+            <p>透過左側鏡頭掃描或輸入 ISBN，系統將直接以 Google 搜尋全網各大書店，精準擷取書名、出版社、出版日期與頁數。</p>
+          </div>
+          <div id="books-list" class="books-list"></div>
+        </div>
+      </section>
+
+      <!-- 欄位 3: 網路檢索 Terminal Log 終端日誌 -->
+      <section class="card panel-terminal">
+        <div class="panel-header">
+          <div class="panel-title">
+            <i data-lucide="terminal"></i> 網路檢索日誌
+          </div>
+          <div class="terminal-actions">
+            <button id="btn-copy-log" class="btn btn-sm btn-ghost" title="複製日誌">複製</button>
+            <button id="btn-clear-log" class="btn btn-sm btn-ghost" title="清空日誌">清空</button>
+          </div>
+        </div>
+        <div class="terminal-body" id="terminal-logs">
+          <!-- Log 內容由 JavaScript 即時動態寫入 -->
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Google Custom Search API 設定對話框 -->
+  <dialog id="modal-settings" class="app-dialog">
+    <div class="dialog-box">
+      <div class="dialog-header">
+        <h3><i data-lucide="settings"></i> A 方案：Google 搜尋 API 設定</h3>
+        <button id="btn-close-settings" class="btn-icon"><i data-lucide="x"></i></button>
+      </div>
+      <form id="form-settings">
+        <div class="settings-intro">
+          <p>A 方案使用 <strong>Google Programmable Search Engine</strong> 全網檢索，每日提供 100 次完全免費額度。金鑰僅儲存在您的瀏覽器本地，安全不外洩。</p>
+        </div>
+
+        <div class="form-field">
+          <label for="setting-api-key">Google API Key：</label>
+          <input type="password" id="setting-api-key" placeholder="例如: AIzaSy..." autocomplete="off">
+          <span class="field-hint">由 Google Cloud Console 建立之金鑰（需啟用 Custom Search API 及可選啟用 Books API）</span>
+        </div>
+
+        <div class="form-field">
+          <label for="setting-cx">搜尋引擎 ID (cx)：</label>
+          <input type="text" id="setting-cx" placeholder="例如: 017576662... 或 a8b9c0d1e2f3g" autocomplete="off">
+          <span class="field-hint">於 Google 自訂搜尋引擎 (cse.google.com) 取得之「搜尋引擎 ID」，需開啟「搜尋整個網路」</span>
+        </div>
+
+        <div class="settings-guide-card">
+          <h4><i data-lucide="help-circle"></i> 2 分鐘快速取得教學：</h4>
+          <ol>
+            <li>前往 <a href="https://programmablesearchengine.google.com/" target="_blank" rel="noopener">Google 自訂搜尋引擎</a> 建立搜尋引擎，搜尋範圍選擇「<strong>搜尋整個網路</strong>」，複製 <strong>搜尋引擎 ID (cx)</strong>。</li>
+            <li>前往 <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud API 憑證</a> 啟用 <strong>Custom Search API</strong> 並取得 <strong>API Key</strong>。</li>
+          </ol>
+        </div>
+
+        <div class="settings-test-row">
+          <button type="button" id="btn-test-connection" class="btn btn-ghost btn-sm">
+            <i data-lucide="wifi"></i> 測試連線 (以《少爺》ISBN 9789863840626 測試)
+          </button>
+          <span id="test-status-text" class="test-status"></span>
+        </div>
+
+        <div class="dialog-footer">
+          <button type="button" id="btn-cancel-settings" class="btn btn-ghost">關閉</button>
+          <button type="submit" class="btn btn-primary"><i data-lucide="save"></i> 儲存設定</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- 手動輸入與智慧剪貼簿對話框 -->
+  <dialog id="modal-manual" class="app-dialog">
+    <div class="dialog-box">
+      <div class="dialog-header">
+        <h3>手動輸入 / 智慧提取</h3>
+        <button id="btn-close-modal" class="btn-icon"><i data-lucide="x"></i></button>
+      </div>
+
+      <div class="tab-header">
+        <button type="button" class="tab-btn active" id="tab-btn-isbn">直接輸入 ISBN</button>
+        <button type="button" class="tab-btn" id="tab-btn-snippet">貼上 Google 摘要智慧辨識</button>
+      </div>
+
+      <!-- Tab 1: ISBN 搜尋 -->
+      <form id="form-manual" class="tab-content active">
+        <p class="dialog-desc">輸入 10 碼或 13 碼 ISBN，系統將呼叫 Google 搜尋引擎擷取 4 大核心欄位：</p>
+        <div class="input-wrap">
+          <input type="text" id="modal-isbn-input" placeholder="例如：9789863840626" autocomplete="off">
+        </div>
+        <div class="dialog-footer">
+          <button type="button" id="btn-cancel-modal" class="btn btn-ghost">取消</button>
+          <button type="submit" class="btn btn-primary"><i data-lucide="search"></i> 開始搜尋</button>
+        </div>
+      </form>
+
+      <!-- Tab 2: 貼上 Google 摘要文字智慧辨識 -->
+      <form id="form-snippet" class="tab-content" style="display:none;">
+        <p class="dialog-desc">若您在 Google 搜尋中複製了一段書店或網頁摘要，直接貼在下方，系統自動萃取 4 大欄位：</p>
+        <div class="form-field">
+          <label for="snippet-text">Google / 書店 搜尋文字摘要：</label>
+          <textarea id="snippet-text" rows="4" placeholder="例如：書名：少爺，出版社：野人文化，出版日：2016/07/20，裝訂／頁數：平裝／240頁，ISBN：9789863840626"></textarea>
+        </div>
+        <div class="dialog-footer">
+          <button type="button" id="btn-cancel-snippet" class="btn btn-ghost">取消</button>
+          <button type="submit" class="btn btn-primary"><i data-lucide="sparkles"></i> 智慧辨識並加入</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- 手動編輯 4 大核心欄位對話框 -->
+  <dialog id="modal-edit" class="app-dialog">
+    <div class="dialog-box">
+      <div class="dialog-header">
+        <h3>編輯核心資訊</h3>
+        <button id="btn-close-edit" class="btn-icon"><i data-lucide="x"></i></button>
+      </div>
+      <form id="form-edit">
+        <input type="hidden" id="edit-book-index">
+        <div class="form-field">
+          <label>ISBN：</label>
+          <input type="text" id="edit-isbn" readonly style="opacity: 0.7;">
+        </div>
+        <div class="form-field">
+          <label>1. 書名 (Title)：</label>
+          <input type="text" id="edit-title" required>
+        </div>
+        <div class="form-field">
+          <label>2. 出版社 (Publisher)：</label>
+          <input type="text" id="edit-publisher">
+        </div>
+        <div class="form-field">
+          <label>3. 出版日期 (Publication Date)：</label>
+          <input type="text" id="edit-date" placeholder="例如: 2015-05-13">
+        </div>
+        <div class="form-field">
+          <label>4. 頁數 (Page Count)：</label>
+          <input type="text" id="edit-pages" placeholder="例如: 240 頁">
+        </div>
+        <div class="dialog-footer">
+          <button type="button" id="btn-cancel-edit" class="btn btn-ghost">取消</button>
+          <button type="submit" class="btn btn-primary"><i data-lucide="save"></i> 儲存更新</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- 應用程式主邏輯 -->
+  <script src="app.js"></script>
+</body>
+</html>
